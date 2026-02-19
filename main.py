@@ -281,18 +281,18 @@ def mix_final_video(video_path, srt_path, output_path):
 # 7. VIDEO BUILDER & FINAL RENDER
 # ==========================================
 def build_cinematic_video(image_paths, audio_path):
-    # Safety Check
     if len(image_paths) == 0:
         raise ValueError("Koi valid image process nahi ho payi. Case skip kiya ja raha hai.")
 
-    audio = AudioFileClip(audio_path)
-    actual_audio_duration = audio.duration
+    voice_audio = AudioFileClip(audio_path)
+    actual_audio_duration = voice_audio.duration
     
-    # LOGIC: Video kam se kam 30 second ka hoga
+    # LOGIC: Video duration kam se kam 30 second hogi
     video_duration = max(actual_audio_duration, 30.0)
-    clip_duration = video_duration / len(image_paths)
     
+    clip_duration = video_duration / len(image_paths)
     clips = []
+    
     for i, img_path in enumerate(image_paths):
         clip = ImageClip(img_path).set_duration(clip_duration)
         if i % 2 == 0:
@@ -302,12 +302,11 @@ def build_cinematic_video(image_paths, audio_path):
         clips.append(clip)
         
     video = concatenate_videoclips(clips, method="compose")
-    video = video.set_audio(audio)
+    video = video.set_audio(voice_audio.set_start(0)) # Yahan sirf voice lagayi hai
     
     temp_video = DIRS["output"] / "temp_video.mp4"
     video.write_videofile(str(temp_video), fps=30, codec="libx264", audio_codec="aac", logger=None)
     
-    # Hum yahan 'actual_audio_duration' bhej rahe hain taaki subtitles sirf awaaz ke sath chalein, pure 30 sec nahi
     return str(temp_video), actual_audio_duration
 
 def mix_final_video(video_path, srt_path, output_path):
@@ -315,19 +314,22 @@ def mix_final_video(video_path, srt_path, output_path):
     escaped_srt = str(srt_path).replace('\\', '\\\\').replace(':', '\\:')
     
     if bgm_path.exists():
+        print("Background music file mil gayi! FFmpeg se mix aur loop kar rahe hain...")
+        # LOGIC: FFmpeg music ko infinite loop (-stream_loop -1) karega aur video ki duration tak chalayega
         cmd = [
             'ffmpeg', '-y', 
             '-i', video_path, 
-            '-stream_loop', '-1', '-i', str(bgm_path), # LOGIC: Ye music ko infinite loop karega
+            '-stream_loop', '-1', '-i', str(bgm_path),
             '-filter_complex', "[1:a]volume=0.1[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]",
             '-map', '0:v', '-map', '[a]',
-            '-vf', f"subtitles={escaped_srt}:force_style='Alignment=2,MarginV=50,Fontsize=18,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=1,BackColour=&H80000000'",
-            '-c:v', 'libx264', '-c:a', 'aac', '-shortest', output_path
+            '-vf', f"subtitles={escaped_srt}:force_style='Alignment=2,MarginV=50,Fontsize=12,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=1,BackColour=&H80000000'",
+            '-c:v', 'libx264', '-c:a', 'aac', output_path
         ]
     else:
+        print("WARNING: background.mp3 file nahi mili! Bina BGM ke video ban raha hai.")
         cmd = [
             'ffmpeg', '-y', '-i', video_path,
-            '-vf', f"subtitles={escaped_srt}:force_style='Alignment=2,MarginV=50'",
+            '-vf', f"subtitles={escaped_srt}:force_style='Alignment=2,MarginV=50,Fontsize=12,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=1,BackColour=&H80000000'",
             '-c:v', 'libx264', '-c:a', 'aac', output_path
         ]
         
