@@ -3,5 +3,5 @@ opencv-python-headless
 numpy
 ffmpeg-python
 moviepy==1.0.3
-gTTS
+edge-tts
 python-dotenv
