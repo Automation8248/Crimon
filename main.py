@@ -11,9 +11,10 @@ import re
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
-from gtts import gTTS
-from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip
 
+# Purane gTTS wale import hata kar ye add karein:
+from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
+import moviepy.audio.fx.all as afx
 # ==========================================
 # 1. CONFIGURATION & SETUP
 # ==========================================
@@ -176,16 +177,22 @@ def download_and_format_images(image_urls):
     return formatted_paths
 
 # ==========================================
-# 6. TTS & SUBTITLES
+# 6. TTS & SUBTITLES (NEW SERIOUS VOICE)
 # ==========================================
 def generate_voice(script_text):
-    tts = gTTS(text=script_text, lang='en', tld='us', slow=False)
     out_path = DIRS["audio"] / "voice.wav"
     temp_mp3 = DIRS["audio"] / "temp.mp3"
+    script_file = BASE_DIR / "assets" / "script.txt"
     
-    tts.save(str(temp_mp3))
+    with open(script_file, "w", encoding="utf-8") as f:
+        f.write(script_text)
+        
+    # LOGIC: Edge-TTS ka use serious case-study aawaz ke liye ('GuyNeural' voice aur thodi slow speed)
+    os.system(f'edge-tts --voice "en-US-GuyNeural" --rate="-10%" --file "{script_file}" --write-media "{temp_mp3}"')
+    
     os.system(f"ffmpeg -y -i \"{temp_mp3}\" -ar 44100 \"{out_path}\" -loglevel error")
-    os.remove(temp_mp3)
+    if os.path.exists(temp_mp3):
+        os.remove(temp_mp3)
     return str(out_path)
 
 def generate_srt(script_text, audio_duration):
@@ -215,6 +222,60 @@ def generate_srt(script_text, audio_duration):
             sub_index += 1
             
     return str(srt_path)
+
+# ==========================================
+# 7. VIDEO BUILDER & FINAL RENDER (MUSIC LOOP & SMALL FONT)
+# ==========================================
+def build_cinematic_video(image_paths, audio_path):
+    if len(image_paths) == 0:
+        raise ValueError("Koi valid image process nahi ho payi. Case skip kiya ja raha hai.")
+
+    voice_audio = AudioFileClip(audio_path)
+    actual_audio_duration = voice_audio.duration
+    
+    # Video kam se kam 30 second ka hoga
+    video_duration = max(actual_audio_duration, 30.0)
+    
+    # LOGIC: Background music ko pehle hi load karke loop kar diya (taaki last tak chale)
+    bgm_path = DIRS["music"] / "background.mp3"
+    if bgm_path.exists():
+        bgm_audio = AudioFileClip(str(bgm_path)).fx(afx.volumex, 0.1) # BGM volume 10%
+        bgm_audio = afx.audio_loop(bgm_audio, duration=video_duration)
+        final_audio = CompositeAudioClip([bgm_audio, voice_audio.set_start(0)])
+    else:
+        final_audio = voice_audio
+        
+    clip_duration = video_duration / len(image_paths)
+    clips = []
+    
+    for i, img_path in enumerate(image_paths):
+        clip = ImageClip(img_path).set_duration(clip_duration)
+        if i % 2 == 0:
+            clip = clip.resize(lambda t: 1 + 0.02 * t).set_position(('center', 'center'))
+        else:
+            clip = clip.resize(lambda t: 1.1 - 0.02 * t).set_position(('center', 'center'))
+        clips.append(clip)
+        
+    video = concatenate_videoclips(clips, method="compose")
+    video = video.set_audio(final_audio) # Ab voice aur loop hua BGM dono isme hain
+    
+    temp_video = DIRS["output"] / "temp_video.mp4"
+    video.write_videofile(str(temp_video), fps=30, codec="libx264", audio_codec="aac", logger=None)
+    
+    return str(temp_video), actual_audio_duration
+
+def mix_final_video(video_path, srt_path, output_path):
+    escaped_srt = str(srt_path).replace('\\', '\\\\').replace(':', '\\:')
+    
+    # LOGIC: BGM pehle add ho gaya, ab yahan sirf Fontsize=12 (Chota font) kiya gaya hai
+    cmd = [
+        'ffmpeg', '-y', '-i', video_path,
+        '-vf', f"subtitles={escaped_srt}:force_style='Alignment=2,MarginV=50,Fontsize=12,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=1,BackColour=&H80000000'",
+        '-c:v', 'libx264', '-c:a', 'aac', output_path
+    ]
+        
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output_path
 
 # ==========================================
 # 7. VIDEO BUILDER & FINAL RENDER
