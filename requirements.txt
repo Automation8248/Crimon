@@ -1,0 +1,7 @@
+requests
+opencv-python-headless
+numpy
+ffmpeg-python
+moviepy
+gTTS
+python-dotenv
