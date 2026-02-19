@@ -132,40 +132,47 @@ def generate_script(case_data):
         f.write(script)
         
     return script
-
 # ==========================================
 # 5. IMAGE PROCESSOR
 # ==========================================
 def download_and_format_images(image_urls):
     formatted_paths = []
     target_w, target_h = 1080, 1920
+    # Ye FBI ki website ko lagega ki Google Chrome se request aa rahi hai
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     
-    # CHANGE YAHAN HAI: image_urls[:4] kar diya taaki max 4 image hi select ho
     for i, url in enumerate(image_urls[:4]):
-        resp = requests.get(url, stream=True)
-        img_array = np.asarray(bytearray(resp.content), dtype=np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        
-        if img is None: continue
+        try:
+            resp = requests.get(url, stream=True, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
+                
+            img_array = np.asarray(bytearray(resp.content), dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             
-        h, w = img.shape[:2]
-        bg = cv2.resize(img, (target_w, target_h))
-        bg = cv2.GaussianBlur(bg, (99, 99), 30)
-        
-        scale = min(target_w/w, target_h/h) * 0.9
-        new_w, new_h = int(w * scale), int(h * scale)
-        fg = cv2.resize(img, (new_w, new_h))
-        
-        y_offset = (target_h - new_h) // 2
-        x_offset = (target_w - new_w) // 2
-        
-        bg[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = fg
-        bg = cv2.convertScaleAbs(bg, alpha=1.1, beta=10)
-        
-        out_path = DIRS["images"] / f"img0{i+1}.jpg"
-        cv2.imwrite(str(out_path), bg)
-        formatted_paths.append(str(out_path))
-        
+            if img is None: continue
+                
+            h, w = img.shape[:2]
+            bg = cv2.resize(img, (target_w, target_h))
+            bg = cv2.GaussianBlur(bg, (99, 99), 30)
+            
+            scale = min(target_w/w, target_h/h) * 0.9
+            new_w, new_h = int(w * scale), int(h * scale)
+            fg = cv2.resize(img, (new_w, new_h))
+            
+            y_offset = (target_h - new_h) // 2
+            x_offset = (target_w - new_w) // 2
+            
+            bg[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = fg
+            bg = cv2.convertScaleAbs(bg, alpha=1.1, beta=10)
+            
+            out_path = DIRS["images"] / f"img0{i+1}.jpg"
+            cv2.imwrite(str(out_path), bg)
+            formatted_paths.append(str(out_path))
+        except Exception as e:
+            print(f"Image download fail ho gayi: {e}")
+            continue
+            
     return formatted_paths
 
 # ==========================================
@@ -213,11 +220,18 @@ def generate_srt(script_text, audio_duration):
 # 7. VIDEO BUILDER & FINAL RENDER
 # ==========================================
 def build_cinematic_video(image_paths, audio_path):
+    # Safety Check
+    if len(image_paths) == 0:
+        raise ValueError("Koi valid image process nahi ho payi. Case skip kiya ja raha hai.")
+
     audio = AudioFileClip(audio_path)
-    audio_duration = audio.duration
-    clip_duration = audio_duration / len(image_paths)
-    clips = []
+    actual_audio_duration = audio.duration
     
+    # LOGIC: Video kam se kam 30 second ka hoga
+    video_duration = max(actual_audio_duration, 30.0)
+    clip_duration = video_duration / len(image_paths)
+    
+    clips = []
     for i, img_path in enumerate(image_paths):
         clip = ImageClip(img_path).set_duration(clip_duration)
         if i % 2 == 0:
@@ -231,7 +245,9 @@ def build_cinematic_video(image_paths, audio_path):
     
     temp_video = DIRS["output"] / "temp_video.mp4"
     video.write_videofile(str(temp_video), fps=30, codec="libx264", audio_codec="aac", logger=None)
-    return str(temp_video), audio_duration
+    
+    # Hum yahan 'actual_audio_duration' bhej rahe hain taaki subtitles sirf awaaz ke sath chalein, pure 30 sec nahi
+    return str(temp_video), actual_audio_duration
 
 def mix_final_video(video_path, srt_path, output_path):
     bgm_path = DIRS["music"] / "background.mp3"
@@ -239,7 +255,9 @@ def mix_final_video(video_path, srt_path, output_path):
     
     if bgm_path.exists():
         cmd = [
-            'ffmpeg', '-y', '-i', video_path, '-i', str(bgm_path),
+            'ffmpeg', '-y', 
+            '-i', video_path, 
+            '-stream_loop', '-1', '-i', str(bgm_path), # LOGIC: Ye music ko infinite loop karega
             '-filter_complex', "[1:a]volume=0.1[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]",
             '-map', '0:v', '-map', '[a]',
             '-vf', f"subtitles={escaped_srt}:force_style='Alignment=2,MarginV=50,Fontsize=18,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=1,BackColour=&H80000000'",
