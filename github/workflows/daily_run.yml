@@ -2,8 +2,8 @@ name: Crimeon
 
 on:
   schedule:
-    - cron: '30 4 * * *' # Roz subah 10:00 AM IST par chalega
-  workflow_dispatch:     # Manual run button GitHub par dega
+    - cron: '30 4 * * *'
+  workflow_dispatch:
 
 jobs:
   build-and-post:
