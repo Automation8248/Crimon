@@ -5,34 +5,24 @@ import requests
 import cv2
 import numpy as np
 import subprocess
-import shutil
 import logging
 import traceback
-import schedule
-import time
-import math
 import re
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 from gtts import gTTS
 from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip
-from git import Repo
 
 # ==========================================
 # 1. CONFIGURATION & SETUP
 # ==========================================
 load_dotenv()
 
-# Environment Variables
 FBI_API_URL = os.getenv("FBI_API_URL", "https://api.fbi.gov/wanted/v1/list")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-REPO_NAME = os.getenv("REPO_NAME")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Directory Structure
 BASE_DIR = Path(__file__).resolve().parent
 DIRS = {
     "images": BASE_DIR / "assets" / "images",
@@ -40,22 +30,24 @@ DIRS = {
     "music": BASE_DIR / "assets" / "music",
     "history": BASE_DIR / "history",
     "output": BASE_DIR / "output",
-    "generated": BASE_DIR / "generated_videos",
     "logs": BASE_DIR / "logs"
 }
 
 HISTORY_FILE = DIRS["history"] / "used_cases.json"
 
 def init_dirs():
-    """Create necessary directories if they don't exist."""
     for d in DIRS.values():
         d.mkdir(parents=True, exist_ok=True)
     
+    # Agar history file nahi hai, toh use khali list ke sath banao
+    if not HISTORY_FILE.exists():
+        with open(HISTORY_FILE, "w") as f:
+            json.dump([], f)
+            
     bgm = DIRS["music"] / "background.mp3"
     if not bgm.exists():
         print(f"Warning: Please place a 'background.mp3' in {DIRS['music']}")
 
-# Initialize Logging
 init_dirs()
 logging.basicConfig(
     filename=DIRS["logs"] / "run.log", 
@@ -67,10 +59,11 @@ logging.basicConfig(
 # 2. HISTORY MANAGER
 # ==========================================
 def load_history():
-    if not HISTORY_FILE.exists():
-        return []
     with open(HISTORY_FILE, "r") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []
 
 def save_history(entry):
     history = load_history()
@@ -86,7 +79,6 @@ def is_used(case_id):
 # 3. DATA FETCHING (FBI API)
 # ==========================================
 def get_random_case():
-    """Fetches a random unused case with at least 4 images."""
     page = random.randint(1, 40)
     response = requests.get(f"{FBI_API_URL}?page={page}")
     response.raise_for_status()
@@ -114,7 +106,6 @@ def clean_html(raw_html):
     return re.sub(cleanr, '', raw_html).replace('&nbsp;', ' ').strip()
 
 def generate_script(case_data):
-    """Generates an American True Crime documentary script."""
     title = case_data['title'].title()
     place = case_data.get('place') or "the United States"
     caution = clean_html(case_data.get('caution'))[:200]
@@ -129,7 +120,7 @@ def generate_script(case_data):
     Do you know something that could close this case?
     """
     
-    script = " ".join(script.split()) # Clean up whitespace
+    script = " ".join(script.split()) 
     script_path = BASE_DIR / "assets" / "script.txt"
     with open(script_path, "w") as f:
         f.write(script)
@@ -140,7 +131,6 @@ def generate_script(case_data):
 # 5. IMAGE PROCESSOR
 # ==========================================
 def download_and_format_images(image_urls):
-    """Downloads images and formats them to vertical 1080x1920."""
     formatted_paths = []
     target_w, target_h = 1080, 1920
     
@@ -149,16 +139,12 @@ def download_and_format_images(image_urls):
         img_array = np.asarray(bytearray(resp.content), dtype=np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         
-        if img is None:
-            continue
+        if img is None: continue
             
         h, w = img.shape[:2]
-        
-        # Blurred background fill
         bg = cv2.resize(img, (target_w, target_h))
         bg = cv2.GaussianBlur(bg, (99, 99), 30)
         
-        # Foreground scale
         scale = min(target_w/w, target_h/h) * 0.9
         new_w, new_h = int(w * scale), int(h * scale)
         fg = cv2.resize(img, (new_w, new_h))
@@ -167,7 +153,7 @@ def download_and_format_images(image_urls):
         x_offset = (target_w - new_w) // 2
         
         bg[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = fg
-        bg = cv2.convertScaleAbs(bg, alpha=1.1, beta=10) # Brightness adjustment
+        bg = cv2.convertScaleAbs(bg, alpha=1.1, beta=10)
         
         out_path = DIRS["images"] / f"img0{i+1}.jpg"
         cv2.imwrite(str(out_path), bg)
@@ -176,10 +162,9 @@ def download_and_format_images(image_urls):
     return formatted_paths
 
 # ==========================================
-# 6. TTS GENERATOR
+# 6. TTS & SUBTITLES
 # ==========================================
 def generate_voice(script_text):
-    """Generates voiceover audio."""
     tts = gTTS(text=script_text, lang='en', tld='us', slow=False)
     out_path = DIRS["audio"] / "voice.wav"
     temp_mp3 = DIRS["audio"] / "temp.mp3"
@@ -187,14 +172,9 @@ def generate_voice(script_text):
     tts.save(str(temp_mp3))
     os.system(f"ffmpeg -y -i \"{temp_mp3}\" -ar 44100 \"{out_path}\" -loglevel error")
     os.remove(temp_mp3)
-    
     return str(out_path)
 
-# ==========================================
-# 7. SUBTITLE GENERATOR
-# ==========================================
 def generate_srt(script_text, audio_duration):
-    """Approximates word timings to generate SRT file."""
     words = script_text.split()
     total_words = len(words)
     time_per_word = audio_duration / total_words
@@ -223,10 +203,9 @@ def generate_srt(script_text, audio_duration):
     return str(srt_path)
 
 # ==========================================
-# 8. VIDEO BUILDER
+# 7. VIDEO BUILDER & FINAL RENDER
 # ==========================================
 def build_cinematic_video(image_paths, audio_path):
-    """Creates video clips from images and concatenates them."""
     audio = AudioFileClip(audio_path)
     audio_duration = audio.duration
     clip_duration = audio_duration / len(image_paths)
@@ -245,26 +224,16 @@ def build_cinematic_video(image_paths, audio_path):
     
     temp_video = DIRS["output"] / "temp_video.mp4"
     video.write_videofile(str(temp_video), fps=30, codec="libx264", audio_codec="aac", logger=None)
-    
     return str(temp_video), audio_duration
 
-# ==========================================
-# 9. MUSIC MIXER & FINAL RENDER
-# ==========================================
 def mix_final_video(video_path, srt_path, output_path):
-    """Mixes background music, ducks volume, and burns subtitles."""
     bgm_path = DIRS["music"] / "background.mp3"
-    
-    # Escape path for FFmpeg subtitle filter (Windows paths need double escaping)
     escaped_srt = str(srt_path).replace('\\', '\\\\').replace(':', '\\:')
     
     if bgm_path.exists():
         cmd = [
-            'ffmpeg', '-y', 
-            '-i', video_path, 
-            '-i', str(bgm_path),
-            '-filter_complex', 
-            "[1:a]volume=0.1[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]",
+            'ffmpeg', '-y', '-i', video_path, '-i', str(bgm_path),
+            '-filter_complex', "[1:a]volume=0.1[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]",
             '-map', '0:v', '-map', '[a]',
             '-vf', f"subtitles={escaped_srt}:force_style='Alignment=2,MarginV=50,Fontsize=18,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=1,BackColour=&H80000000'",
             '-c:v', 'libx264', '-c:a', 'aac', '-shortest', output_path
@@ -280,125 +249,52 @@ def mix_final_video(video_path, srt_path, output_path):
     return output_path
 
 # ==========================================
-# 10. PUBLISHING & NOTIFICATIONS
+# 8. TELEGRAM SENDER
 # ==========================================
-def push_to_github(final_video_path, title):
-    """Commits and pushes the generated video to GitHub."""
-    if not GITHUB_TOKEN or not REPO_NAME:
-        return "Github credentials not set"
-        
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    target_path = DIRS["generated"] / f"{date_str}.mp4"
-    shutil.copy(final_video_path, target_path)
-    
-    try:
-        repo = Repo(BASE_DIR)
-        repo.git.add(all=True)
-        repo.index.commit(f"New true crime video: {title}")
-        origin = repo.remote(name='origin')
-        origin.push()
-        return f"https://raw.githubusercontent.com/{REPO_NAME}/main/generated_videos/{date_str}.mp4"
-    except Exception as e:
-        logging.error(f"GitHub Push Failed: {e}")
-        return "Upload failed"
-
-def send_webhook(data):
-    if WEBHOOK_URL:
-        try:
-            requests.post(WEBHOOK_URL, json=data)
-        except Exception as e:
-            logging.error(f"Webhook Failed: {e}")
-
 def send_telegram(video_path, title):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
+        print("Error: Telegram credentials missing!")
         return
         
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
-    caption = f"{title}\n\n#truecrime #crime #mystery #documentary #shorts"
+    caption = f"🚨 *{title}*\n\n#truecrime #crime #mystery #documentary #shorts"
     
-    try:
-        with open(video_path, 'rb') as video_file:
-            requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'caption': caption}, files={'video': video_file})
-    except Exception as e:
-        logging.error(f"Telegram Post Failed: {e}")
+    with open(video_path, 'rb') as video_file:
+        response = requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'caption': caption, 'parse_mode': 'Markdown'}, files={'video': video_file})
+        response.raise_for_status()
 
 # ==========================================
-# 11. MAIN PIPELINE
+# 9. MAIN EXECUTION
 # ==========================================
 def run_pipeline():
-    logging.info("--- Starting Daily True Crime Automation Pipeline ---")
-    try:
-        # 1. Fetch
-        case_data = get_random_case()
-        logging.info(f"Selected case: {case_data['title']}")
-        
-        # 2. Script
-        script = generate_script(case_data)
-        logging.info("Script generated.")
-        
-        # 3. Images
-        image_paths = download_and_format_images(case_data['images'])
-        logging.info(f"Processed {len(image_paths)} images.")
-        
-        # 4. TTS
-        audio_path = generate_voice(script)
-        logging.info("Audio voiceover generated.")
-        
-        # 5. Video Base
-        temp_video, duration = build_cinematic_video(image_paths, audio_path)
-        logging.info(f"Base video built. Duration: {duration}s")
-        
-        # 6. Subtitles
-        srt_path = generate_srt(script, duration)
-        logging.info("Subtitles generated.")
-        
-        # 7. Final Mix
-        final_video = str(DIRS["output"] / "final.mp4")
-        mix_final_video(temp_video, srt_path, final_video)
-        logging.info("Final video rendered and mixed.")
-        
-        # 8. Upload & Notify
-        github_url = push_to_github(final_video, case_data['title'])
-        
-        webhook_data = {
-            "title": case_data['title'],
-            "case": case_data['case_id'],
-            "video_url": github_url,
-            "duration": duration,
-            "date": datetime.now().strftime("%Y-%m-%d")
-        }
-        send_webhook(webhook_data)
-        send_telegram(final_video, case_data['title'])
-        logging.info("Notifications sent.")
-        
-        # 9. Save History
-        save_history({
-            "case_id": case_data['case_id'],
-            "title": case_data['title'],
-            "created_date": datetime.now().strftime("%Y-%m-%d"),
-            "video_filename": f"{datetime.now().strftime('%Y-%m-%d')}.mp4",
-            "github_url": github_url
-        })
-        logging.info("--- Pipeline completed successfully. ---")
-        
-    except Exception as e:
-        logging.error(f"Pipeline failed: {str(e)}")
-        logging.error(traceback.format_exc())
+    print("Starting GitHub Action True Crime Automation...")
+    case_data = get_random_case()
+    print(f"Case selected: {case_data['title']}")
+    
+    script = generate_script(case_data)
+    image_paths = download_and_format_images(case_data['images'])
+    audio_path = generate_voice(script)
+    
+    temp_video, duration = build_cinematic_video(image_paths, audio_path)
+    srt_path = generate_srt(script, duration)
+    
+    final_video = str(DIRS["output"] / "final.mp4")
+    mix_final_video(temp_video, srt_path, final_video)
+    
+    send_telegram(final_video, case_data['title'])
+    print("Video sent to Telegram!")
+    
+    save_history({
+        "case_id": case_data['case_id'],
+        "title": case_data['title'],
+        "created_date": datetime.now().strftime("%Y-%m-%d")
+    })
+    print("History updated successfully!")
 
-# ==========================================
-# 12. SCHEDULER
-# ==========================================
 if __name__ == "__main__":
-    print("True Crime Automation Started.")
-    print("Initial run starting now...")
-    
-    # Run once immediately on startup
-    run_pipeline()
-    
-    # Then schedule daily
-    schedule.every().day.at("10:00").do(run_pipeline)
-    print("Scheduler active. Waiting for next daily run at 10:00 AM...")
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+    try:
+        run_pipeline()
+    except Exception as e:
+        print(f"Pipeline Failed: {e}")
+        traceback.print_exc()
+        exit(1)
