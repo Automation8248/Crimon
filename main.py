@@ -79,23 +79,29 @@ def is_used(case_id):
 # 3. DATA FETCHING (FBI API)
 # ==========================================
 def get_random_case():
-    page = random.randint(1, 40)
-    response = requests.get(f"{FBI_API_URL}?page={page}")
-    response.raise_for_status()
-    items = response.json().get("items", [])
-    
-    random.shuffle(items)
-    for item in items:
-        if item.get("images") and len(item["images"]) >= 4 and not is_used(item["uid"]):
-            return {
-                "case_id": item["uid"],
-                "title": item.get("title", "Unknown Subject"),
-                "description": item.get("description", ""),
-                "place": item.get("place_of_birth", "an unknown location"),
-                "caution": item.get("caution", "Details are still unfolding."),
-                "images": [img["original"] for img in item["images"]]
-            }
-    raise ValueError("No suitable case found on this page.")
+    for attempt in range(10): # 10 baar alag-alag page try karega
+        page = random.randint(1, 40)
+        response = requests.get(f"{FBI_API_URL}?page={page}")
+        
+        if response.status_code != 200:
+            continue
+            
+        items = response.json().get("items", [])
+        random.shuffle(items)
+        
+        for item in items:
+            # CHANGE YAHAN HAI: `>= 4` ki jagah `>= 1` kar diya
+            if item.get("images") and len(item["images"]) >= 1 and not is_used(item["uid"]):
+                return {
+                    "case_id": item["uid"],
+                    "title": item.get("title", "Unknown Subject"),
+                    "description": item.get("description", ""),
+                    "place": item.get("place_of_birth", "an unknown location"),
+                    "caution": item.get("caution", "Details are still unfolding."),
+                    "images": [img["original"] for img in item["images"]]
+                }
+                
+    raise ValueError("10 attempts ke baad bhi koi suitable case nahi mila.")
 
 # ==========================================
 # 4. SCRIPT GENERATOR
@@ -134,7 +140,8 @@ def download_and_format_images(image_urls):
     formatted_paths = []
     target_w, target_h = 1080, 1920
     
-    for i, url in enumerate(image_urls[:5]):
+    # CHANGE YAHAN HAI: image_urls[:4] kar diya taaki max 4 image hi select ho
+    for i, url in enumerate(image_urls[:4]):
         resp = requests.get(url, stream=True)
         img_array = np.asarray(bytearray(resp.content), dtype=np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
