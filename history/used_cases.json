@@ -443,5 +443,10 @@
         "case_id": "70dbb4e1fa37427e9baa5ccb96444d75",
         "title": "JOHN DOE - BUCKEYE, ARIZONA",
         "created_date": "2026-06-23"
+    },
+    {
+        "case_id": "e8333eccb199469faa7bfcbaca764306",
+        "title": "MIKHAIL IVANOVICH BYSTROV",
+        "created_date": "2026-06-24"
     }
 ]
